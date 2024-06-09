@@ -1,4 +1,4 @@
-import event_manager
+import game_monitor
 from engine.game_object import GameObject
 from game_objects.views.page_manager_view import PageManagerView
 from game_objects.page import Page
@@ -8,8 +8,8 @@ class PageManager(GameObject):
     _TOTAL_ROWS = 11
     _NUM_COLS = 16
 
-    def __init__(self, game):
-        self._game = game
+    def __init__(self, stage):
+        self._stage = stage
 
         self._ram_slots = []
         self._swap_slots = []
@@ -42,9 +42,9 @@ class PageManager(GameObject):
 
     def setup(self):
         self._pages_in_ram_label_xy = (
-            self._game.process_manager.view.width, 120)
+            self._stage.process_manager.view.width, 120)
 
-        num_ram_rows = self._game.config['num_ram_rows']
+        num_ram_rows = self._stage.config.num_ram_rows
         num_swap_rows = self._TOTAL_ROWS - num_ram_rows
 
         num_cols = PageManager._NUM_COLS
@@ -52,7 +52,7 @@ class PageManager(GameObject):
         for row in range(num_ram_rows):
             for column in range(num_cols):
                 ram_slot = PageSlot()
-                x = self._game.process_manager.view.width + \
+                x = self._stage.process_manager.view.width + \
                     column * ram_slot.view.width + column * 5
                 y = 155 + row * ram_slot.view.height + row * 5
                 ram_slot.view.set_xy(x, y)
@@ -61,13 +61,13 @@ class PageManager(GameObject):
 
         if num_swap_rows > 0:
             self._pages_in_swap_label_xy = (
-                self._game.process_manager.view.width,
+                self._stage.process_manager.view.width,
                 164 + num_ram_rows * PageSlot().view.height + num_ram_rows * 5)
 
             for row in range(num_swap_rows):
                 for column in range(num_cols):
                     swap_slot = PageSlot()
-                    x = self._game.process_manager.view.width + \
+                    x = self._stage.process_manager.view.width + \
                         column * ram_slot.view.width + column * 5
                     y = self._pages_in_swap_label_xy[1] + \
                         35 + row * ram_slot.view.height + row * 5
@@ -98,42 +98,42 @@ class PageManager(GameObject):
         self._pages[(pid, idx)] = page
         return page
 
-    def swap_page(self, page):
+    def swap_page(self, page : Page, swap_whole_row : bool):
+        source_slots = self._swap_slots if page.in_swap else self._ram_slots
+        target_slots = self._ram_slots if page.in_swap else self._swap_slots
+
         can_swap = False
-        if page.in_swap:
-            for ram_slot in self._ram_slots:
-                if not ram_slot.has_page:
-                    can_swap = True
+        previous_slot = None
+
+        for ram_slot in target_slots:
+            if not ram_slot.has_page:
+                can_swap = True
+                break
+        if can_swap:
+            for source_slot in source_slots:
+                if source_slot.page == page:
+                    source_slot.page = None
+                    previous_slot = source_slot
                     break
-            if can_swap:
-                for swap_slot in self._swap_slots:
-                    if swap_slot.page == page:
-                        swap_slot.page = None
-                        break
-                for ram_slot in self._ram_slots:
-                    if not ram_slot.has_page:
-                        ram_slot.page = page
-                        page.view.set_xy(ram_slot.view.x, ram_slot.view.y)
-                        break
-                page.in_swap = False
-                event_manager.event_page_swap(page.pid, page.idx, page.in_swap)
-        else:
-            for swap_slot in self._swap_slots:
-                if not swap_slot.has_page:
-                    can_swap = True
+            for target_slot in target_slots:
+                if not target_slot.has_page:
+                    target_slot.page = page
+                    page.view.set_xy(target_slot.view.x, target_slot.view.y)
                     break
-            if can_swap:
-                for ram_slot in self._ram_slots:
-                    if ram_slot.page == page:
-                        ram_slot.page = None
-                        break
-                for swap_slot in self._swap_slots:
-                    if not swap_slot.has_page:
-                        swap_slot.page = page
-                        page.view.set_xy(swap_slot.view.x, swap_slot.view.y)
-                        break
-                page.in_swap = True
-                event_manager.event_page_swap(page.pid, page.idx, page.in_swap)
+            page.in_swap = not page.in_swap
+            game_monitor.notify_page_swap(page.pid, page.idx, page.in_swap)
+            if swap_whole_row:
+                slots_on_same_row = [
+                    slot
+                    for slot in source_slots
+                    if (
+                        slot.view.y == previous_slot.view.y
+                        and slot != previous_slot
+                    )
+                ]
+                for slot in slots_on_same_row:
+                    if slot.has_page:
+                        self.swap_page(slot.page, False)
 
     def delete_page(self, page):
         for ram_slot in self._ram_slots:

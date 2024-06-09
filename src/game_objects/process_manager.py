@@ -2,17 +2,19 @@ from math import inf
 import re
 
 from constants import ONE_SECOND, ONE_MINUTE
-import event_manager
+import game_monitor
 from engine.game_event_type import GameEventType
 from engine.game_object import GameObject
 from engine.random import randint
+from game_objects.checkbox import Checkbox
 from game_objects.cpu import Cpu
 from game_objects.io_queue import IoQueue
+from game_objects.priority_process import PriorityProcess
 from game_objects.process import Process
 from game_objects.views.process_manager_view import ProcessManagerView
 from game_objects.process_slot import ProcessSlot
 from game_objects.sort_button import SortButton
-from window_size import WINDOW_HEIGHT
+from window_size import WINDOW_WIDTH, WINDOW_HEIGHT
 
 _NUM_KEYS = list(map(str, range(10))) + list(map(lambda i: f'[{str(i)}]', range(10)))
 
@@ -20,7 +22,9 @@ _NUM_PROCESS_SLOT_ROWS = 6
 _NUM_PROCESS_SLOT_COLUMNS = 7
 
 _UPTIME_MS_TO_SHOW_SORT_BUTTON = 6 * ONE_MINUTE
+_UPTIME_MS_TO_SHOW_AUTO_SORT_CHECKBOX = 12 * ONE_MINUTE
 _MIN_SORT_COOLDOWN_MS = 100
+_AUTO_SORT_CHECKBOX_ANIMATION_SPEED = 30
 
 def _is_sorted(process_list: [Process]):
     if len(process_list) <= 1:
@@ -33,8 +37,8 @@ def _is_sorted(process_list: [Process]):
 class ProcessManager(GameObject):
     MAX_TERMINATED_BY_USER = 10
 
-    def __init__(self, game):
-        self._game = game
+    def __init__(self, stage):
+        self._stage = stage
 
         self._cpu_list = None
         self._alive_process_list = None
@@ -42,6 +46,9 @@ class ProcessManager(GameObject):
         self._user_terminated_process_slots = None
         self._io_queue = None
         self._processes = None
+        self._sort_processes_button = None
+        self._auto_sort_checkbox = None
+        self._auto_sort_checkbox_final_x_position = None
 
         self._next_pid = None
         self._last_new_process_check = None
@@ -52,7 +59,7 @@ class ProcessManager(GameObject):
         self._last_sort_time = 0
 
         self._new_process_probability_numerator = int(
-            game.config['new_process_probability'] * 100)
+            stage.config.new_process_probability * 100)
 
         if self._new_process_probability_numerator > 0:
             self._max_wait_between_new_processes = int(
@@ -60,13 +67,11 @@ class ProcessManager(GameObject):
         else:
             self._max_wait_between_new_processes = inf
 
-        self._sort_processes_button = SortButton(self)
-
         super().__init__(ProcessManagerView(self))
 
     @property
-    def game(self):
-        return self._game
+    def stage(self):
+        return self._stage
 
     @property
     def cpu_list(self):
@@ -103,7 +108,7 @@ class ProcessManager(GameObject):
         self._last_process_creation_time = 0
         self._user_terminated_process_count = 0
 
-        for i in range(self._game.config['num_cpus']):
+        for i in range(self._stage.config.num_cpus):
             self.cpu_list.append(Cpu(i + 1))
 
         for i, cpu in enumerate(self.cpu_list):
@@ -133,12 +138,29 @@ class ProcessManager(GameObject):
             self._user_terminated_process_slots.append(process_slot)
         self.children.extend(self._user_terminated_process_slots)
 
+        self._sort_processes_button = SortButton(self)
         self._sort_processes_button.view.set_xy(220, 121)
         self._sort_processes_button.visible = False
         self.children.append(self._sort_processes_button)
 
+        self._auto_sort_checkbox = Checkbox('Auto-Sort')
+        self._auto_sort_checkbox.visible = False
+        self._auto_sort_checkbox.view.set_xy(
+            # Initial position off-screen. An animation to move it to its
+            # final position will be triggered when the checkbox becomes available.
+            WINDOW_WIDTH,
+            self._sort_processes_button.view.y
+                + (self._sort_processes_button.view.height
+                   - self._auto_sort_checkbox.view.height) // 2
+        )
+        self.children.append(self._auto_sort_checkbox)
+
+        self._auto_sort_checkbox_final_x_position = (
+            self._sort_processes_button.view.x + self._sort_processes_button.view.width + 10
+        )
+
     def _create_process(self, process_slot_id=None):
-        if len(self._alive_process_list) < self._game.config['max_processes']:
+        if len(self._alive_process_list) < self._stage.config.max_processes:
             if process_slot_id is None:
                 for i, process_slot in enumerate(self.process_slots):
                     if process_slot.process is None:
@@ -148,7 +170,11 @@ class ProcessManager(GameObject):
             pid = self._next_pid
             self._next_pid += 1
 
-            process = Process(pid, self._game)
+            process_cls = Process
+            if randint(1, 100) <= int(self._stage.config.priority_process_probability * 100):
+                process_cls = PriorityProcess
+            process = process_cls(pid, self._stage)
+
             process_slot = self.process_slots[process_slot_id]
             process_slot.process = process
             self.children.append(process)
@@ -158,7 +184,7 @@ class ProcessManager(GameObject):
                                 self.view.height + process.view.height)
             process.view.target_y = process_slot.view.y
 
-            event_manager.event_process_new(pid)
+            game_monitor.notify_process_new(pid)
             self._processes[pid] = process
             return True
         return False
@@ -193,8 +219,12 @@ class ProcessManager(GameObject):
 
     def sort_idle_processes(self):
         self._sort_in_progress = True
-        self._last_sort_time = self._game.current_time
+        self._last_sort_time = self._stage.current_time
         self._continue_sorting()
+
+    @property
+    def _auto_sort_enabled(self):
+        return self._auto_sort_checkbox.checked
 
     def _continue_sorting(self):
         """
@@ -287,10 +317,10 @@ class ProcessManager(GameObject):
                         processes_are_moving = True
                         break
             if not processes_are_moving:
-                self._game.game_over = True
+                self._stage.game_over = True
                 return
 
-        if self._next_pid <= self._game.config['num_processes_at_startup'] and current_time - \
+        if self._next_pid <= self._stage.config.num_processes_at_startup and current_time - \
                 self._last_new_process_check >= 50:
             self._last_new_process_check = current_time
             self._last_process_creation_time = current_time
@@ -303,17 +333,26 @@ class ProcessManager(GameObject):
                 self._last_process_creation_time = current_time
 
         if (
-            self.game.uptime_manager.uptime_ms >= _UPTIME_MS_TO_SHOW_SORT_BUTTON
+            self.stage.uptime_manager.uptime_ms >= _UPTIME_MS_TO_SHOW_SORT_BUTTON
             and not self._sort_processes_button.visible
         ):
             self._sort_processes_button.visible = True
+        if (
+            self.stage.uptime_manager.uptime_ms >= _UPTIME_MS_TO_SHOW_AUTO_SORT_CHECKBOX
+            and not self._auto_sort_checkbox.visible
+        ):
+            self._auto_sort_checkbox.visible = True
+            self._auto_sort_checkbox.view.target_x = self._auto_sort_checkbox_final_x_position
 
         self._sort_processes_button.disabled = (
             self._sort_in_progress
             or current_time - self._last_sort_time < _MIN_SORT_COOLDOWN_MS
+            or self._auto_sort_enabled
         )
-        if self._sort_in_progress:
+        if self._sort_in_progress or self._auto_sort_enabled:
             self._continue_sorting()
+
+        self._auto_sort_checkbox.view.move_towards_target_xy(_AUTO_SORT_CHECKBOX_ANIMATION_SPEED)
 
         for game_object in self.children:
             game_object.update(current_time, events)

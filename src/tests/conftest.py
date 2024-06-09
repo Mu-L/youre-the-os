@@ -4,7 +4,8 @@ os.chdir('src')
 import pygame
 import pytest
 
-import scenes.game
+import scenes.stage
+from stage_config import StageConfig
 from window_size import WINDOW_SIZE
 
 @pytest.fixture
@@ -13,34 +14,33 @@ def screen(monkeypatch):
     return screen
 
 @pytest.fixture
-def Game(monkeypatch):
+def Stage(monkeypatch):
     @property
     def current_time(self):
         return 0
-    monkeypatch.setattr(scenes.game.Game, 'current_time', current_time)
-    return scenes.game.Game
+    monkeypatch.setattr(scenes.stage.Stage, 'current_time', current_time)
+    return scenes.stage.Stage
 
 @pytest.fixture
-def game(Game, screen):
-    game_config = {
-        'name': 'Test Config',
-        'num_cpus': 4,
-        'num_processes_at_startup': 14,
-        'num_ram_rows': 8,
-        'new_process_probability': 0,
-        'io_probability': 0,
-        'graceful_termination_probability': 0
-    }
-    game = Game(game_config)
-    game.screen = screen
-    game.setup()
-    return game
+def stage(Stage, screen):
+    config = StageConfig(
+        num_cpus = 4,
+        num_processes_at_startup = 14,
+        num_ram_rows = 8,
+        new_process_probability = 0,
+        io_probability = 0,
+        graceful_termination_probability = 0
+    )
+    stage = Stage('Test Stage', config)
+    stage.screen = screen
+    stage.setup()
+    return stage
 
 @pytest.fixture
-def game_custom_config(screen, Game):
-    def create_game(game_config):
-        game = Game(game_config)
-        game.screen = screen
-        game.setup()
-        return game
-    return create_game
+def stage_custom_config(screen, Stage):
+    def create_stage(stage_config):
+        stage = Stage('Test Stage', stage_config)
+        stage.screen = screen
+        stage.setup()
+        return stage
+    return create_stage

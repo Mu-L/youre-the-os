@@ -2,6 +2,7 @@ from datetime import datetime
 from os import path
 import pygame
 
+from constants import LAST_ALIVE_STARVATION_LEVEL
 from engine.drawable import Drawable
 from ui.color import Color
 from ui.fonts import FONT_SECONDARY_XXSMALL
@@ -55,26 +56,6 @@ class ProcessView(Drawable):
     def height(self):
         return 64
 
-    @property
-    def target_x(self):
-        return self._target_x
-
-    @target_x.setter
-    def target_x(self, target_x):
-        self._target_x = target_x
-
-    @property
-    def target_y(self):
-        return self._target_y
-
-    @target_y.setter
-    def target_y(self, target_y):
-        self._target_y = target_y
-
-    def set_target_xy(self, target_x, target_y):
-        self.target_x = target_x
-        self.target_y = target_y
-
     def draw(self, surface):
         if self._process.has_ended and self._process.starvation_level == 0:
             color = Color.LIGHT_BLUE
@@ -92,17 +73,40 @@ class ProcessView(Drawable):
         surface.blit(self._pid_text_surface, (self._x + 28, self._y + 5))
 
         if self._process.is_waiting_for_io:
-            surface.blit(_waiting_for_io_emoji, (self._x + 27, self._y + 32))
+            surface.blit(_waiting_for_io_emoji, (self._x + 32, self._y + 32))
 
         if self._process.is_progressing_to_happiness:
+            progress_bar_width = min(
+                    (self.width - 4),
+                    (self.width - 4)
+                        - (self._process.cpu.time_for_process_happiness
+                            - self._process.current_state_duration)
+                        * (self.width - 4) / self._process.cpu.time_for_process_happiness,
+                )
+            progress_bar_height = 2
             pygame.draw.rect(surface, Color.BLUE, pygame.Rect(
                 self._x + 2,
                 self._y + self.height - 4,
-                min(
-                    (self.width - 4),
-                    (self.width - 4)
-                        - (5000 - self._process.current_state_duration)
-                        * (self.width - 4) / 5000,
-                ),
-                2
+                progress_bar_width,
+                progress_bar_height
+            ))
+        elif (
+            self._process.starvation_level == LAST_ALIVE_STARVATION_LEVEL
+            and not self._process.has_cpu
+        ):
+            progress_bar_width = (
+                self.width
+                    - 4
+                    - (
+                        self._process.current_starvation_level_duration
+                        / self._process.time_between_starvation_levels
+                    )
+                    * (self.width - 4)
+            )
+            progress_bar_height = 2
+            pygame.draw.rect(surface, Color.BLUE, pygame.Rect(
+                self._x + 2,
+                self._y + self.height - 4,
+                progress_bar_width,
+                progress_bar_height
             ))
